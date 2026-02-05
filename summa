@@ -1,0 +1,203 @@
+controller
+[RequireAuth([RoleName.Admin, RoleName.Hr])]
+// [RequirePermission(UserAction.Drive, ActionType.Update)]
+[HttpPost("AutoAssign/panelmember")]
+[ProducesResponseType<Response<AutoAssignDTO>>(200)]
+[ProducesResponseType<BaseResponse>(400)]
+[ProducesResponseType<ErrorResponse>(500)]
+
+public async Task<IActionResult> AutoAssignPanel([FromQuery] int driveId)
+{
+    _logger.LogInformation(LogMessage.StartMethod, nameof(driveId));
+    try
+    {
+        using (_transactionRepository.BeginTransaction())
+        {
+            var baseResponse = new BaseResponse();
+
+            var validator = await new AutoPanelAssignRequest(baseResponse.Warnings, _repoService, _userProvider)
+                .ValidateAsync(driveId);
+            if (!validator.IsValid)
+            {
+                validator.Errors.ForEach(e =>
+                    baseResponse.Errors.Add(new ValidationError
+                    {
+                        PropertyName = e.PropertyName,
+                        ErrorMessage = e.ErrorMessage
+                    })
+                );
+                return BadRequest(baseResponse);
+            }
+            var response = await _roundService.AutoPanelAssign(driveId);
+            _transactionRepository.CommitTransaction();
+            //var response = await _roundService.AutoPanelAssign(driveId, currentUserId);
+            return Ok();
+
+        }
+    }
+    catch (CommonException ex)
+    {
+        _logger.LogWarning(LogMessage.EndMethodException, nameof(driveId), ex.Message);
+        _transactionRepository.RollbackTransaction();
+        return BadRequest(new BaseResponse
+        {
+            Errors = [
+                new ValidationError { PropertyName = PropertyName.Main, ErrorMessage = ex.Message }
+            ]
+        });
+    }
+   
+}
+[RequireAuth([RoleName.Admin, RoleName.Hr])]
+// [RequirePermission(UserAction.Drive, ActionType.Update)]
+[HttpPut("ReAssign/panelmember")]
+[ProducesResponseType<Response<ReassignPanel>>(200)]
+[ProducesResponseType<BaseResponse>(400)]
+[ProducesResponseType<ErrorResponse>(500)]
+public async Task<IActionResult> ReassignInterviewer(ReassignPanel request)
+{
+    _logger.LogInformation(LogMessage.StartMethod, nameof(ReassignInterviewer));
+    try
+    {
+        using (_transactionRepository.BeginTransaction())
+        {
+            var baseResponse = new BaseResponse();
+
+            var validator = await new ReassignPanelAssignRequest(baseResponse.Warnings, _repoService, _userProvider)
+                .ValidateAsync(request);
+            if (!validator.IsValid)
+            {
+                validator.Errors.ForEach(e =>
+                    baseResponse.Errors.Add(new ValidationError
+                    {
+                        PropertyName = e.PropertyName,
+                        ErrorMessage = e.ErrorMessage
+                    })
+                );
+                return BadRequest(baseResponse);
+            }
+            await _roundService.ReassignInterviewer(request.roundId, request.oldInterviewId, request.newInterviewerId);
+            _transactionRepository.CommitTransaction();
+            return Ok();
+        }
+    }
+    catch (CommonException ex)
+    {
+        _logger.LogWarning(LogMessage.EndMethodException, nameof(ReassignInterviewer), ex.Message);
+        _transactionRepository.RollbackTransaction();
+        return BadRequest(new BaseResponse
+        {
+            Errors = [
+                new ValidationError { PropertyName = PropertyName.Main, ErrorMessage = ex.Message }
+            ]
+        });
+    }
+}
+using FluentValidation;
+using HireHub.Core.DTO;
+using HireHub.Core.Service;
+using HireHub.Core.Utils.UserProgram.Interface;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace HireHub.Core.Validators
+{
+    public class ReassignPanelAssignRequest:AbstractValidator<ReassignPanel>
+    {
+        public ReassignPanelAssignRequest(List<object> warnings, RepoService repoService, IUserProvider userProvider)
+        {
+            RuleFor(x => x.roundId)
+                        .GreaterThan(0)
+                        .WithMessage("Round Id must be a valid value");
+
+            RuleFor(x => x.oldInterviewId)
+            .GreaterThan(0)
+            .WithMessage("Old interviewer is required");
+
+            RuleFor(x => x.newInterviewerId)
+            .GreaterThan(0)
+            .WithMessage("New interviewer is required")
+            .NotEqual(x => x.oldInterviewId)
+            .WithMessage("New interviewer cannot be same as old interviewer");
+
+           
+        }
+    }
+}
+using FluentValidation;
+using HireHub.Core.Data.Models;
+using HireHub.Core.Service;
+using HireHub.Core.Utils.Common;
+using HireHub.Core.Utils.UserProgram.Interface;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace HireHub.Core.Validators
+{
+    public class AutoPanelAssignRequest:AbstractValidator<int>
+    {
+        public AutoPanelAssignRequest(List<object> warnings, RepoService repoService,
+        IUserProvider userProvider)
+        {
+            RuleFor(e => e).NotNull();
+
+            RuleFor(e => e).Custom((driveId, context) =>
+            {
+                var drivedetail = repoService.DriveRepository.GetByIdAsync(driveId).WaitAsync(CancellationToken.None).Result;
+                if(drivedetail!.DriveDate <= DateTime.Today)
+                {
+                    context.AddFailure(PropertyName.Main, ResponseMessage.DriveNotYetStart);
+                }
+                if (drivedetail.Status != DriveStatus.InProposal)
+                {
+                    context.AddFailure(PropertyName.Main, ResponseMessage.SomethingHappenInDrive);
+                }
+            });
+        }
+    }
+}
+Repo
+
+public async Task<List<DriveCandidate>> GetAllDriveCandidates(int driveId)
+{
+    var driveCandidates = await _context.DriveCandidates
+                            .Where(dc => dc.DriveId == driveId)
+                            .ToListAsync();
+    return driveCandidates;
+}
+
+public async Task<List<DriveMember>> GetAllDriveMember(int driveId)
+{
+    return await _context.DriveMembers
+        .Where(dm => dm.DriveId == driveId && dm.RoleId == 3)
+        .ToListAsync();
+}
+public async Task<Round?> GetOldInterviewer(int roundId, int oldInterviewerId)
+{
+    return await _context.Rounds
+        .Include(r => r.DriveCandidate)
+        .FirstOrDefaultAsync(r =>
+            r.RoundId == roundId &&
+            r.InterviewerId == oldInterviewerId);
+}
+
+
+
+public async Task AssignNewInterview(Round round, int newInterviewerUserId)
+{
+    var newPanel = await _context.DriveMembers.FirstOrDefaultAsync(dm =>
+        dm.DriveMemberId == newInterviewerUserId &&
+        dm.RoleId == 3 &&
+        dm.DriveId == round.DriveCandidate.DriveId);
+
+    if (newPanel == null)
+        throw new Exception("Invalid panel interviewer");
+
+    round.InterviewerId = newPanel.DriveMemberId;
+}

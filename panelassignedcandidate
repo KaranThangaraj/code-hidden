@@ -1,0 +1,136 @@
+[RequireAuth([RoleName.Admin, RoleName.Panel])]
+    [HttpGet("panelmember/assignedcandidates")]
+    [ProducesResponseType<Response<List<CandidateDTO>>>(200)]
+    [ProducesResponseType<BaseResponse>(400)]
+    [ProducesResponseType<ContentResult>(401)]
+    [ProducesResponseType<ContentResult>(403)]
+    [ProducesResponseType<ErrorResponse>(500)]
+    public async Task<IActionResult> GetPanelAssignedCandidates()
+    {
+        _logger.LogInformation(LogMessage.StartMethod);
+ 
+        try
+        {
+            using (_transactionRepository.BeginTransaction())
+            {
+                var request = new GetPanelAssignedCandidatesRequest();
+ 
+                var baseResponse = new BaseResponse();
+                var validator = await new GetPanelAssignedCandidatesRequestValidator(baseResponse.Warnings, _repoService, _userProvider)
+                    .ValidateAsync(request);
+ 
+                if (!validator.IsValid)
+                {
+                    validator.Errors.ForEach(e =>
+                        baseResponse.Errors.Add(new ValidationError
+                        {
+                            PropertyName = e.PropertyName,
+                            ErrorMessage = e.ErrorMessage
+                        })
+                    );
+                    return BadRequest(baseResponse);
+                }
+                var currentUserId = int.Parse(_userProvider.CurrentUserId);//GetPanelAssignedCandidatesRequestValidator
+                var response = await _candidateService.GetCandidatesByUserIdAsync(currentUserId);
+                _logger.LogInformation(LogMessage.EndMethod);
+ 
+                return Ok(response);
+            }
+        }
+        catch (CommonException ex)
+        {
+            _logger.LogWarning(LogMessage.EndMethodException, ex.Message);
+            return BadRequest(new BaseResponse()
+            {
+                Errors = [
+                    new ValidationError { PropertyName = PropertyName.Main, ErrorMessage = ex.Message }
+                ]
+            });
+        }
+    }using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+ 
+namespace HireHub.Core.DTO
+{
+    public class GetPanelAssignedCandidatesRequest
+    {
+    }
+}
+public async Task<List<Candidate>> GetCandidatesByUserIdAsync(int userId)
+{
+    // Business rules can go here if needed
+    return await _candidateRepository.GetCandidatesByUserIdAsync(userId);
+}
+using FluentValidation;
+using FluentValidation.Validators;
+using HireHub.Core.Data.Models;
+using HireHub.Core.DTO;
+using HireHub.Core.Service;
+using HireHub.Core.Utils.Common;
+using HireHub.Core.Utils.UserProgram.Interface;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+ 
+namespace HireHub.Core.Validators
+{
+    public class GetPanelAssignedCandidatesRequestValidator : AbstractValidator<GetPanelAssignedCandidatesRequest>
+    {
+        public GetPanelAssignedCandidatesRequestValidator(
+           List<object> warnings,
+           RepoService repoService,
+           IUserProvider userProvider)
+        {
+            RuleFor(e => e).Custom((request, context) =>
+            {
+                // 1️⃣ Logged-in user check
+                var currentUserId = userProvider.CurrentUserId;
+                var currentUserRole = userProvider.CurrentUserRole;
+ 
+                if (string.IsNullOrEmpty(currentUserId))
+                {
+                    context.AddFailure(PropertyName.Main, ResponseMessage.Unauthorized);
+                    return;
+                }
+ 
+                // 2️⃣ Role must be PANEL
+                if (currentUserRole != RoleName.Panel)
+                {
+                    context.AddFailure(PropertyName.Main, ResponseMessage.OnlyPanelCanViewAssignedCandidates);
+                    return;
+                }
+ 
+                // 3️⃣ User must exist
+                var userExists = repoService.UserRepository.GetByIdAsync(currentUserId).WaitAsync(CancellationToken.None).Result;
+ 
+ 
+                if (userExists == null)
+                {
+                    context.AddFailure(PropertyName.Main, ResponseMessage.UserNotFound);
+                    return;
+                }
+ 
+ 
+            });
+        }
+    }
+}
+public async Task<List<Candidate>> GetCandidatesByUserIdAsync(int userId)
+{
+    return await _context.DriveMembers
+        .Where(dm=>dm.UserId==userId&&dm.RoleId==3)
+        .Join(
+            _context.Rounds,
+            dm => dm.DriveMemberId,
+            r => r.InterviewerId,
+            (dm, r) => r.DriveCandidate
+        )
+        .Select(dc=>dc.Candidate!)
+        .Distinct()
+        .ToListAsync();
+}

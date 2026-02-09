@@ -1,0 +1,170 @@
+//controller
+
+ [RequireAuth([RoleName.Mentor])]
+ [HttpPost("candidate/mark-attendance")]
+ [ProducesResponseType<Response<RequestMarkAttendances>>(200)]
+ [ProducesResponseType<BaseResponse>(400)]
+ [ProducesResponseType<ContentResult>(401)]
+ [ProducesResponseType<ContentResult>(403)]
+ [ProducesResponseType<ErrorResponse>(500)]
+ public async Task<IActionResult> MarkAttendance([FromBody] RequestMarkAttendances request)
+ {
+     _logger.LogInformation(LogMessage.StartMethod, nameof(MarkAttendance));
+
+     try
+     {
+         using (_transactionRepository.BeginTransaction())
+         {
+             var baseResponse = new BaseResponse();
+
+             var validator = await new
+                 CandidateRequestATtendanceValidator(baseResponse.Warnings, _repoService, _userProvider)
+                 .ValidateAsync(request);
+
+             if (!validator.IsValid)
+             {
+                 validator.Errors.ForEach(e =>
+                     baseResponse.Errors.Add(new ValidationError
+                     {
+                         PropertyName = e.PropertyName,
+                         ErrorMessage = e.ErrorMessage
+                     })
+                 );
+                 return BadRequest(baseResponse);
+             }
+
+             var currentuserId = int.Parse(_userProvider.CurrentUserId);
+
+             var response = await _candidateService.MarkAttendance(request.driveId,request.CandidateId, request.attendanceStatus, currentuserId);
+
+             
+
+             _transactionRepository.CommitTransaction();
+
+             _logger.LogInformation(LogMessage.EndMethod, nameof(MarkAttendance));
+
+             return Ok(response);
+         }
+     }
+     catch (CommonException ex)
+     {
+         _logger.LogWarning(LogMessage.EndMethodException, nameof(MarkAttendance), ex.Message);
+         _transactionRepository.RollbackTransaction();
+         return BadRequest(new BaseResponse
+         {
+             Errors = [
+                 new ValidationError { PropertyName = PropertyName.Main, ErrorMessage = ex.Message }
+             ]
+         });
+     }
+ }
+
+ //validator
+
+ using FluentValidation;
+using HireHub.Core.DTO;
+using HireHub.Core.Service;
+using HireHub.Core.Utils.Common;
+using HireHub.Core.Utils.UserProgram.Interface;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace HireHub.Core.Validators
+{
+    public class CandidateRequestATtendanceValidator : AbstractValidator<RequestMarkAttendances>
+    {
+        public CandidateRequestATtendanceValidator(
+        List<object> warnings,
+        RepoService repoService,
+        IUserProvider userProvider)
+        {
+            RuleFor(x => x.driveId)
+                .NotEmpty()
+                .WithMessage(ResponseMessage.InvalidDrive);
+
+            RuleFor(x => x.CandidateId)
+                .NotEmpty()
+                .WithMessage(ResponseMessage.InvalidCandidate);
+
+            RuleFor(x => x).CustomAsync(async (request, context, ct) =>
+            {
+                var currentUserId = int.Parse(userProvider.CurrentUserId);
+
+                var driveCandidate =
+                    await repoService.CandidateRepository
+                        .GetValidDriveCandidateForAttendance(
+                            request.driveId,
+                            request.CandidateId,
+                            currentUserId);
+
+                if (driveCandidate == null)
+                {
+                    context.AddFailure(
+                        PropertyName.Main,
+                        ResponseMessage.AttendanceNotAllowed);
+                    return;
+                }
+
+                if (driveCandidate.Attendance_Status == "Present")
+                {
+                    context.AddFailure(
+                        PropertyName.Main,
+                        ResponseMessage.AttendanceAlreadyMarked);
+                }
+            });
+        }
+    }
+}
+//service
+
+ public async Task<bool> MarkAttendance(
+ int driveId,
+ int candidateId,
+  string Attendance_Status,
+ int currentUserId
+)
+ {
+     var driveCandidate =
+         await _candidateRepository
+             .GetValidDriveCandidateForAttendance(driveId, candidateId, currentUserId);
+
+     if (driveCandidate == null)
+         throw new CommonException(
+             "Attendance allowed only for today's active drive.");
+
+     // Business rule
+     if (driveCandidate.Attendance_Status == "Present")
+         throw new CommonException("Attendance already marked.");
+
+     // Update
+     driveCandidate.Attendance_Status = Attendance_Status;
+     driveCandidate.StatusSetBy = currentUserId;
+
+     await _saveRepository.SaveChangesAsync(); // or UnitOfWork
+
+     return true;
+ }
+
+ //repo
+public async Task<DriveCandidate?> GetValidDriveCandidateForAttendance(int driveId, int candidateId, int currentUserId)
+{
+    var driveCandidate = await _context.DriveCandidates
+    .Include(dc => dc.Drive)
+    .Where(dc =>
+        dc.DriveId == driveId &&
+        dc.CandidateId == candidateId &&
+        dc.Drive != null &&
+        dc.Drive.DriveDate.Date == DateTime.Today &&
+        dc.Drive.Status == DriveStatus.Started &&
+        _context.DriveMembers.Any(dm =>
+            dm.DriveId == driveId &&
+            dm.UserId == currentUserId
+        )
+    )
+    .FirstOrDefaultAsync();
+
+    return driveCandidate;
+}

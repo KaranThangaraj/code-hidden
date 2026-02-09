@@ -143,3 +143,18 @@ namespace HireHub.Core.DTO
                      .ThenInclude(dm => dm.User)
          .ToListAsync(cancellationToken);
  }
+
+
+
+
+
+
+
+
+
+   public const string InvalidDrive = "Invalid drive.";
+   public const string InvalidCandidate = "Invalid candidate.";
+   public const string AttendanceNotAllowed =
+       "Attendance allowed only for today's active drive.";
+   public const string AttendanceAlreadyMarked =
+       "Attendance already marked.";

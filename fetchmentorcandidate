@@ -1,0 +1,145 @@
+
+	[RequireAuth([RoleName.Mentor])]
+	[HttpGet("fetchCandidatesDetail/{mentorId}")]
+	[ProducesResponseType<Response<List<DriveCandidateDTO>>>(200)]
+	[ProducesResponseType<BaseResponse>(400)]
+	[ProducesResponseType<ErrorResponse>(500)]
+    public async Task<IActionResult> getCandidatesByMentorId(int mentorId)
+    {
+        _logger.LogInformation(LogMessage.StartMethod, nameof(getCandidatesByMentorId));
+        try
+        {
+            var response = await _userService.GetDrivewithCandidate(mentorId);
+
+			_logger.LogInformation(LogMessage.EndMethod, nameof(getCandidatesByMentorId));
+            return Ok(response);
+
+		}
+        catch (CommonException ex)
+        {
+			_logger.LogWarning(LogMessage.EndMethodException, nameof(getCandidatesByMentorId), ex.Message);
+			return BadRequest(new BaseResponse()
+			{
+				Errors = [
+					new ValidationError { PropertyName = PropertyName.Main, ErrorMessage = ex.Message }
+				]
+			});
+		}
+    }
+
+//service
+ public async Task<Response<List<DriveWithCandidatesDto>>> GetDrivewithCandidate(int mentorId)
+ {
+     _logger.LogInformation(LogMessage.StartMethod, nameof(GetDrivewithCandidate));
+
+     var user = await _userRepository.GetByIdAsync(
+         mentorId,
+         CancellationToken.None
+     ) ?? throw new CommonException(ResponseMessage.UserNotFound);
+
+     var drives = await _driveRepository
+         .GetMentorDrivesWithCandidatesAsync(mentorId, CancellationToken.None);
+
+     var result = drives.Select(d => new DriveWithCandidatesDto
+     {
+         DriveId = d.DriveId,
+         DriveName = d.DriveName,
+         DriveDate = d.DriveDate,
+
+         Candidates = d.DriveCandidates
+             .Where(dc => dc.Candidate != null)
+             .Select(dc =>
+             {
+                 var latestRound = dc.Rounds
+                     .OrderByDescending(r => r.RoundId)
+                     .FirstOrDefault();
+
+                 return new MentorCandidateDto
+                 {
+                     // Candidate
+                     CandidateId = dc.Candidate!.CandidateId,
+                     FullName = dc.Candidate.FullName,
+                     Email = dc.Candidate.Email,
+                     Phone = dc.Candidate.Phone,
+                     Address = dc.Candidate.Address,
+                     College = dc.Candidate.College,
+                     PreviousCompany = dc.Candidate.PreviousCompany,
+
+                     // DriveCandidate
+                     AttendanceStatus = dc.Attendance_Status,
+                     Status = dc.Status,
+
+                     // Round
+                     RoundType = latestRound?.RoundType,
+                     RoundStatus = latestRound?.Status,
+                     RoundResult = latestRound?.Result,
+
+                     // Interviewer (User)
+                     InterviewerId = latestRound?.Interviewer?.UserId,
+                     InterviewerName = latestRound?.Interviewer?.User?.FullName,
+                     InterviewerEmail = latestRound?.Interviewer?.User?.Email,
+                     InterviewerPhone = latestRound?.Interviewer?.User?.Phone
+                 };
+             })
+             .ToList()
+     }).ToList();
+
+     _logger.LogInformation(LogMessage.EndMethod, nameof(GetDrivewithCandidate));
+
+     return new Response<List<DriveWithCandidatesDto>>
+     {
+         Data = result
+     };
+ }
+
+//dto
+using HireHub.Core.Data.Models;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace HireHub.Core.DTO
+{
+    public class MentorCandidateDto
+    {
+        public int CandidateId { get; set; }
+        public string FullName { get; set; } = null!;
+        public string Email { get; set; } = null!;
+        public string Phone { get; set; } = null!;
+        public string? Address { get; set; }
+        public string? College { get; set; }
+        public string? PreviousCompany { get; set; }
+
+        public string? AttendanceStatus { get; set; }
+        public CandidateStatus Status { get; set; }
+
+        public RoundType? RoundType { get; set; }
+        public RoundStatus? RoundStatus { get; set; }
+        public RoundResult? RoundResult { get; set; }
+        public int? InterviewerId { get; set; }
+        public string? InterviewerName { get; set; }
+        public string? InterviewerEmail { get; set; }
+        public string? InterviewerPhone { get; set; }
+    }
+}
+//repo
+ public async Task<List<Drive>> GetMentorDrivesWithCandidatesAsync(
+ int mentorId,
+ CancellationToken cancellationToken = default)
+ {
+     return await _context.Drives
+         .Where(d =>
+             (d.Status == DriveStatus.Started ||
+              d.Status == DriveStatus.InProposal) &&
+             d.DriveMembers.Any(dm => dm.UserId == mentorId)
+         )
+         .Include(d => d.DriveCandidates)
+             .ThenInclude(dc => dc.Candidate)
+         .Include(d => d.DriveCandidates)
+             .ThenInclude(dc => dc.Rounds)
+                 .ThenInclude(r => r.Interviewer)
+                     .ThenInclude(dm => dm.User)
+         .ToListAsync(cancellationToken);
+ }

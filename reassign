@@ -1,0 +1,272 @@
+candidate controller
+
+[RequireAuth([RoleName.Mentor])]
+[HttpPost("candidate/reassignment")]
+[ProducesResponseType<HireHub.Core.DTO.Response<RequestReassignmentDto>>(200)]
+[ProducesResponseType<BaseResponse>(400)]
+[ProducesResponseType<ErrorResponse>(500)]
+public async Task<IActionResult> RequestReassignment(
+[FromBody] RequestReassignmentDto request)
+{
+    _logger.LogInformation(LogMessage.StartMethod, nameof(RequestReassignment));
+
+    try
+    {
+        using (_transactionRepository.BeginTransaction())
+        {
+            var baseResponse = new BaseResponse();
+
+            var validator = await new RequestReassignmentValidator(
+                baseResponse.Warnings,
+                _repoService,
+                _userProvider
+            ).ValidateAsync(request);
+
+            if (!validator.IsValid)
+            {
+                validator.Errors.ForEach(e =>
+                    baseResponse.Errors.Add(new ValidationError
+                    {
+                        PropertyName = e.PropertyName,
+                        ErrorMessage = e.ErrorMessage
+                    })
+                );
+
+                return BadRequest(baseResponse);
+            }
+
+            var response = await _candidateService.RequestReassignmentAsync(
+                request.driveId,
+                request.candidateId,
+                request.previousUserId,
+                request.newUserId,
+                request.requireApproval,
+                int.Parse(_userProvider.CurrentUserId)
+            );
+
+            _transactionRepository.CommitTransaction();
+
+            _logger.LogInformation(LogMessage.EndMethod, nameof(RequestReassignment));
+            return Ok(response);
+        }
+    }
+    catch (CommonException ex)
+    {
+        _transactionRepository.RollbackTransaction();
+        return BadRequest(new BaseResponse
+        {
+            Errors =
+            [
+                new ValidationError
+            {
+                PropertyName = PropertyName.Main,
+                ErrorMessage = ex.Message
+            }
+            ]
+        });
+    }
+}
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace HireHub.Core.DTO
+{
+    public class RequestReassignmentDto
+    {
+        public int driveId { get; set; }
+        public int candidateId { get; set; }
+        public int previousUserId { get; set; }
+        public int newUserId { get; set; }
+        public bool requireApproval { get; set; }
+    }
+}
+
+//valid
+using FluentValidation;
+using HireHub.Core.Data.Filters;
+using HireHub.Core.DTO;
+using HireHub.Core.Service;
+using HireHub.Core.Utils.Common;
+using HireHub.Core.Utils.UserProgram.Interface;
+
+public class RequestReassignmentValidator
+    : AbstractValidator<RequestReassignmentDto>
+{
+    public RequestReassignmentValidator(
+        List<object> warnings,
+        RepoService repoService,
+        IUserProvider userProvider)
+    {
+        RuleFor(x => x.driveId)
+            .GreaterThan(0);
+
+        RuleFor(x => x.candidateId)
+            .GreaterThan(0);
+
+        RuleFor(x => x.previousUserId)
+            .GreaterThan(0);
+
+        RuleFor(x => x.newUserId)
+            .GreaterThan(0);
+
+        RuleFor(x => x)
+            .CustomAsync(async (request, context, cancellation) =>
+            {
+                // 1️⃣ Prevent same user reassignment
+                if (request.previousUserId == request.newUserId)
+                {
+                    context.AddFailure(
+                        PropertyName.Main,
+                        "Previous and new interviewer cannot be the same");
+                    return;
+                }
+
+                // 2️⃣ Validate Drive exists
+                var drive = await repoService.DriveRepository
+                    .GetByIdAsync(request.driveId);
+
+                if (drive == null)
+                {
+                    context.AddFailure(
+                        PropertyName.Main,
+                        ResponseMessage.DriveNotFound);
+                    return;
+                }
+
+                // 3️⃣ Get drive members for this drive
+                var members = await repoService.DriveRepository
+                    .GetDriveMembersWithDetailsAsync(
+                        new DriveMemberFilter
+                        {
+                            DriveId = request.driveId,
+                            IncludePastDrives = true
+                        });
+
+                if (!members.Any())
+                {
+                    context.AddFailure(
+                        PropertyName.Main,
+                        "No members found for this drive");
+                    return;
+                }
+
+                // 4️⃣ Check new user is panel (RoleId = 3 in your DB)
+                var isPanel = members.Any(m =>
+                    m.UserId == request.newUserId &&
+                    m.RoleId == 3);
+
+                if (!isPanel)
+                {
+                    context.AddFailure(
+                        PropertyName.Main,
+                        "New interviewer is not a panel member");
+                }
+
+                // 5️⃣ Optional: Check previous user exists in same drive
+                var previousExists = members.Any(m =>
+                    m.UserId == request.previousUserId &&
+                    m.RoleId == 3);
+
+                if (!previousExists)
+                {
+                    context.AddFailure(
+                        PropertyName.Main,
+                        "Previous interviewer is not a panel member of this drive");
+                }
+            });
+    }
+}
+//service
+
+ public async Task<Response<RequestReassignmentDto>> RequestReassignmentAsync(
+     int driveId,
+     int candidateId,
+     int previousUserId,
+     int newUserId,
+     bool requireApproval,
+     int requestedBy)
+ {
+     await _candidateRepository.CreateReassignmentAsync(
+         driveId,
+         candidateId,
+         previousUserId,
+         newUserId,
+         requireApproval,
+         requestedBy
+     );
+
+     return new Response<RequestReassignmentDto>
+     {
+         Data = new RequestReassignmentDto
+         {
+             driveId = driveId,
+             candidateId = candidateId,
+             previousUserId = previousUserId,
+             newUserId = newUserId,
+             requireApproval = requireApproval
+         }
+     };
+ }
+
+//repo
+public async Task CreateReassignmentAsync(
+int driveId,
+int candidateId,
+int previousUserId,
+int newUserId,
+bool requireApproval,
+int requestedBy)
+{
+    var driveCandidate = await _context.DriveCandidates
+        .Include(dc => dc.Rounds)
+        .FirstOrDefaultAsync(dc =>
+            dc.DriveId == driveId &&
+            dc.CandidateId == candidateId);
+
+    if (driveCandidate == null)
+        throw new CommonException("Candidate not found in drive");
+
+    var previousPanel = await _context.DriveMembers.FirstOrDefaultAsync(dm =>
+        dm.DriveId == driveId &&
+        dm.UserId == previousUserId &&
+        dm.RoleId == 3);
+
+    var newPanel = await _context.DriveMembers.FirstOrDefaultAsync(dm =>
+        dm.DriveId == driveId &&
+        dm.UserId == newUserId &&
+        dm.RoleId == 3);
+
+    if (previousPanel == null || newPanel == null)
+        throw new CommonException("Invalid panel member");
+
+    var round = driveCandidate.Rounds
+        .FirstOrDefault(r => r.InterviewerId == previousPanel.DriveMemberId);
+
+    if (round == null)
+        throw new CommonException("Round not found");
+
+    var reassignment = new CandidateReassignment
+    {
+        DriveCandidateId = driveCandidate.DriveCandidateId,
+        PreviousUserId = previousPanel.DriveMemberId,
+        NewUserId = newPanel.DriveMemberId,
+        RequestedBy = requestedBy,
+        RequireApproval = requireApproval,
+        RequestedDate = DateTime.Now
+    };
+
+    _context.CandidateReassignments.Add(reassignment);
+
+    //if (!requireApproval)
+    //{
+    //    round.InterviewerId = newPanel.DriveMemberId;
+    //    reassignment.ApprovedBy = requestedBy;
+    //    reassignment.ApprovedDate = DateTime.Now;
+    //}
+    round.InterviewerId = reassignment.NewUserId;
+    await _context.SaveChangesAsync();
+}

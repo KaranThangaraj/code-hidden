@@ -1,0 +1,162 @@
+using HireHub.Core.Data.Models;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace HireHub.Core.DTO
+{
+    public class PanelUserAvailabilityDTO
+    {
+        public int UserId { get; set; }
+        public string FullName { get; set; } = string.Empty;
+        public string Email { get; set; } = string.Empty;
+
+        public string DriveName { get; set; } = string.Empty;
+        public DateTime DriveDate { get; set; }
+
+        public List<DateTime> AvailableDates { get; set; } = new();
+    }
+}
+
+//controller
+
+[RequireAuth([RoleName.Hr])]
+[HttpGet("panel-availability")]
+[ProducesResponseType<Core.DTO.Response<List<PanelUserAvailabilityDTO>>>(200)]
+[ProducesResponseType<BaseResponse>(400)]
+[ProducesResponseType<ErrorResponse>(500)]
+public async Task<IActionResult> GetPanelAvailability()
+{
+    _logger.LogInformation(LogMessage.StartMethod, nameof(GetPanelAvailability));
+    try
+    {
+        var baseResponse = new BaseResponse();
+        var userId =int.Parse(_userProvider.CurrentUserId);
+        var response = await _userService.GetPanelAvailabilityAsync(userId);
+        _logger.LogInformation(LogMessage.EndMethod, nameof(fetchPanelDetailsforHr));
+        return Ok(response);
+    }
+    catch (CommonException ex)
+    {
+        _logger.LogWarning(LogMessage.EndMethodException, nameof(GetPanelAvailability), ex.Message);
+        return BadRequest(new BaseResponse()
+        {
+            Errors = [
+                new ValidationError { PropertyName = PropertyName.Main, ErrorMessage = ex.Message }
+            ]
+        });
+    }
+}
+
+//service
+public async Task<Response<List<PanelUserAvailabilityDTO>>> GetPanelAvailabilityAsync(int userId)
+{
+    _logger.LogInformation(LogMessage.StartMethod,nameof(PanelUserAvailabilityDTO));
+
+    var data = await _userRepository.GetPanelUsersByUserIdAsync(userId);
+
+    if (data == null || !data.Any())
+    {
+        _logger.LogInformation("No panel users found for userId: {UserId}", userId);
+
+        return new Response<List<PanelUserAvailabilityDTO>>   
+        {
+            Data = new List<PanelUserAvailabilityDTO>()
+        };
+    }
+
+    // Next Week (Monday → Sunday)
+    var today = DateTime.UtcNow.Date;
+
+    int daysToNextMonday = ((int)DayOfWeek.Monday - (int)today.DayOfWeek + 7) % 7;
+    if (daysToNextMonday == 0)
+        daysToNextMonday = 7;
+
+    var nextMonday = today.AddDays(daysToNextMonday);
+    var nextSunday = nextMonday.AddDays(6);
+
+    var result = data.Select(x => new PanelUserAvailabilityDTO
+    {
+        UserId = x.UserId,
+        FullName = x.FullName,
+        Email = x.Email,
+        DriveName = x.DriveName,
+        DriveDate = x.DriveDate,
+
+        AvailableDates = x.Availabilities != null
+            ? x.Availabilities
+                .Where(a => a.AvailabilityDate.Date >= nextMonday &&
+                            a.AvailabilityDate.Date <= nextSunday)
+                .Select(a => a.AvailabilityDate)
+                .ToList()
+            : new List<DateTime>()
+
+    }).ToList();
+
+    _logger.LogInformation(LogMessage.EndMethod,nameof(PanelUserAvailabilityDTO));
+
+    return new Response<List<PanelUserAvailabilityDTO>>
+    {
+        Data = result
+    };
+}
+
+//repo
+
+ public async Task<List<PanelUserProjection>> GetPanelUsersByUserIdAsync(int userId)
+ {
+     var driveData = await (
+         from dm in _context.DriveMembers
+         join d in _context.Drives on dm.DriveId equals d.DriveId
+         where dm.UserId == userId
+         select new { dm.DriveId, d.DriveName, d.DriveDate }
+     ).FirstOrDefaultAsync();
+
+     if (driveData == null)
+         return new List<PanelUserProjection>();
+
+     var result = await _context.Users
+     .Where(u => _context.DriveMembers
+         .Any(dm => dm.UserId == u.UserId
+                 && dm.DriveId == driveData.DriveId
+                 && dm.RoleId == 3))
+     .Select(u => new PanelUserProjection
+     {
+         UserId = u.UserId,
+         FullName = u.FullName,
+         Email = u.Email,
+         DriveName = driveData.DriveName,
+         DriveDate = driveData.DriveDate,
+
+         Availabilities = _context.Availabilities
+             .Where(a => a.UserId == u.UserId)
+             .ToList()
+     })
+     .ToListAsync();
+
+     return result;
+ }
+
+using HireHub.Core.Data.Models;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace HireHub.Core.DTO
+{
+    public class PanelUserProjection
+    {
+        public int UserId { get; set; }
+        public string FullName { get; set; } = string.Empty;
+        public string Email { get; set; } = string.Empty;
+
+        public string DriveName { get; set; } = string.Empty;
+        public DateTime DriveDate { get; set; }
+
+        public List<Availability> Availabilities { get; set; } = new();
+    }
+}

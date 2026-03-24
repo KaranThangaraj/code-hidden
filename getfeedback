@@ -1,0 +1,117 @@
+[RequireAuth([RoleName.Admin,RoleName.Mentor,RoleName.Hr,RoleName.Panel])]
+//[RequirePermission(UserAction.Drive, ActionType.View)]
+[HttpGet("candidate/feedback/fetch/{CandidateId:int}")]
+[ProducesResponseType<Response<CandidateFeedbackDto>>(200)]
+[ProducesResponseType<BaseResponse>(400)]
+[ProducesResponseType<ContentResult>(401)]
+[ProducesResponseType<ContentResult>(403)]
+[ProducesResponseType<ErrorResponse>(500)]
+public async Task<IActionResult> GetFeedbackParticularCandidate([FromRoute] int CandidateId)
+{
+    _logger.LogInformation(LogMessage.StartMethod, nameof(GetFeedbackParticularCandidate));
+
+    try
+    {
+        var response = await _driveService.GetCandidateFeedbackDetailsAsync(CandidateId);
+
+        _logger.LogInformation(LogMessage.EndMethod, nameof(GetFeedbackParticularCandidate));
+
+        return Ok(response);
+    }
+    catch (CommonException ex)
+    {
+        _logger.LogWarning(LogMessage.EndMethodException, nameof(GetFeedbackParticularCandidate), ex.Message);
+        return BadRequest(new BaseResponse()
+        {
+            Errors = [
+                new ValidationError { PropertyName = PropertyName.Main, ErrorMessage = ex.Message }
+            ]
+        });
+    }
+
+}
+
+using HireHub.Core.Data.Models;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace HireHub.Core.DTO
+{
+    public class CandidateFeedbackDto
+    {
+        public int RoundId { get; set; }
+        public string? RoundType { get; set; }
+        public string? Result { get; set; }
+
+        public int FeedbackId { get; set; }
+        public int? OverallRating { get; set; }
+        public string? TechnicalSkill { get; set; }
+        public string? Communication { get; set; }
+        public string? ProblemSolving { get; set; }
+        public string? OverallFeedback { get; set; }
+        public Recommendation Recommendation { get; set; }
+        public DateTime SubmittedDate { get; set; }
+    }
+}
+
+
+//service
+public async Task<Response<List<CandidateFeedbackDto>>> GetCandidateFeedbackDetailsAsync(
+    int candidateId,
+    CancellationToken cancellationToken = default)
+{
+    _logger.LogInformation(LogMessage.StartMethod, nameof(GetCandidateFeedbackDetailsAsync));
+
+    var feedback=await _driveRepository.GetCandidateFeedbackDetailsAsync(candidateId, cancellationToken);
+
+    if (feedback == null)
+    {
+        _logger.LogWarning("No feedback found for CandidateId: {CandidateId}", candidateId);
+
+        return new Response<List<CandidateFeedbackDto>>
+        {
+            Data = new List<CandidateFeedbackDto>(),
+            
+        };
+    }
+    _logger.LogInformation(LogMessage.EndMethod, nameof(GetCandidateFeedbackDetailsAsync));
+
+
+    return new Response<List<CandidateFeedbackDto>>
+    {
+        Data = feedback,
+    };
+
+}
+
+//repo
+public async Task<List<CandidateFeedbackDto>> GetCandidateFeedbackDetailsAsync(
+int candidateId,
+CancellationToken cancellationToken = default)
+{
+    var query = _context.Rounds
+        .Where(r => r.DriveCandidate != null &&
+                    r.DriveCandidate.CandidateId == candidateId &&
+                    r.Feedback != null)
+        .Select(r => new CandidateFeedbackDto
+        {
+            RoundId = r.RoundId,
+            RoundType = r.RoundType.ToString(),
+            Result = r.Result.ToString(),
+
+            FeedbackId = r.Feedback!.FeedbackId,
+            OverallRating = r.Feedback.OverallRating,
+            TechnicalSkill = r.Feedback.TechnicalSkill,
+            Communication = r.Feedback.Communication,
+            ProblemSolving = r.Feedback.ProblemSolving,
+            OverallFeedback = r.Feedback.OverallFeedback,
+            Recommendation = r.Feedback.Recommendation,
+            SubmittedDate = r.Feedback.SubmittedDate
+        })
+        .OrderBy(x => x.SubmittedDate);
+
+    return await query.ToListAsync(cancellationToken);
+}

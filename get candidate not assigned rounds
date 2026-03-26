@@ -1,5 +1,5 @@
 //controller
-[RequireAuth([RoleName.Admin, RoleName.Mentor, RoleName.Hr, RoleName.Panel])]
+[RequireAuth([RoleName.Admin, RoleName.Hr])]
 //[RequirePermission(UserAction.Drive, ActionType.View)]
 [HttpGet("candidate/NotAssigned/rounds/{driveId:int}")]
 [ProducesResponseType<Response<CandidateFeedbackDto>>(200)]

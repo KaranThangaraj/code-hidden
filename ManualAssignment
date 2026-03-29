@@ -1,0 +1,220 @@
+//drive repository
+ public async Task<bool> IsDriveCandidateValidAsync(int driveId, int driveCandidateId)
+ {
+     return await _context.DriveCandidates
+         .AnyAsync(dc =>
+             dc.DriveId == driveId &&
+             dc.DriveCandidateId == driveCandidateId);
+ }
+
+//user repostory
+public async Task<bool> IsUserPanelForDriveAsync(int driveId, int userId)
+{
+    return await _context.DriveMembers
+        .AnyAsync(dm =>
+            dm.UserId == userId &&
+            dm.DriveId == driveId &&
+            dm.RoleId == 3);
+}
+
+public async Task<DriveMember> GetDriveMemberAsync(int driveId, int userId)
+{
+    var driveMember = await _context.DriveMembers
+        .FirstOrDefaultAsync(dm =>
+            dm.UserId == userId &&
+            dm.DriveId == driveId &&
+            dm.RoleId == 3);
+
+    if (driveMember == null)
+        throw new Exception(ResponseMessage.DriveMemberNotFound);
+
+    return driveMember;
+}
+
+//round repo
+public async Task<bool> IsDuplicateAssignmentAsync(int driveCandidateId, int userId)
+{
+    return await _context.Rounds
+        .AnyAsync(r =>
+            r.DriveCandidateId == driveCandidateId &&
+            r.Interviewer!.UserId == userId);
+}
+
+//validator
+
+using FluentValidation;
+using HireHub.Core.DTO;
+using HireHub.Core.Service;
+using HireHub.Core.Utils.UserProgram.Interface;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace HireHub.Core.Validators
+{
+    public class ManualAssignmentCandidateValidator:AbstractValidator<ManualAssignmentCandidate>
+    {
+        public ManualAssignmentCandidateValidator(List<object> warnings, RepoService repoService,
+            IUserProvider userProvider)
+        {
+            RuleFor(x => x.driveId)
+                .GreaterThan(0).WithMessage("DriveId is required");
+
+            RuleFor(x => x.driveCandidateId)
+                .GreaterThan(0).WithMessage("DriveCandidateId is required");
+
+            RuleFor(x => x.userId)
+                .GreaterThan(0).WithMessage("UserId is required");
+
+            RuleFor(x => x)
+                .MustAsync(async (request, cancellation) =>
+                {
+                    return await repoService.DriveRepository
+                        .IsDriveCandidateValidAsync(request.driveId, request.driveCandidateId);
+                })
+                .WithMessage("DriveCandidate does not belong to the given Drive");
+
+            RuleFor(x => x)
+                .MustAsync(async (request, cancellation) =>
+                {
+                    return await repoService.UserRepository
+                        .IsUserPanelForDriveAsync(request.driveId, request.userId);
+                })
+                .WithMessage("User is not a panel member for this drive");
+
+            RuleFor(x => x)
+                .MustAsync(async (request, cancellation) =>
+                {
+                    var isDuplicate = await repoService.RoundRepository
+                        .IsDuplicateAssignmentAsync(request.driveCandidateId, request.userId);
+
+                    return !isDuplicate;
+                })
+                .WithMessage("This interviewer is already assigned to this candidate");
+
+            RuleFor(x => x)
+                .CustomAsync(async (request, context, cancellation) =>
+                {
+                    var rounds = await repoService.RoundRepository
+                        .GetRoundsForDriveCandidate(request.driveCandidateId);
+
+                    if (rounds.Count >= 3)
+                    {
+                        warnings.Add(new
+                        {
+                            Message = "Candidate already has multiple rounds assigned"
+                        });
+                    }
+                });
+        }
+    }
+}
+
+//controller
+[RequireAuth([RoleName.Admin, RoleName.Hr])]
+[RequirePermission(UserAction.Drive, ActionType.Update)]
+[HttpPost("manual/assign/candidate/add")]
+[ProducesResponseType<Response<RoundDTO>>(200)]
+[ProducesResponseType<BaseResponse>(400)]
+[ProducesResponseType<ContentResult>(401)]
+[ProducesResponseType<ContentResult>(403)]
+[ProducesResponseType<ErrorResponse>(500)]
+public async Task<IActionResult> ManualAssignment([FromBody] ManualAssignmentCandidate request)
+{
+    _logger.LogInformation(LogMessage.StartMethod, nameof(ManualAssignment));
+
+    try
+    {
+        using (_transactionRepository.BeginTransaction())
+        {
+            var baseResponse = new BaseResponse();
+
+            var validator = await new ManualAssignmentCandidateValidator(baseResponse.Warnings, _repoService, _userProvider)
+                .ValidateAsync(request);
+
+            if (!validator.IsValid)
+            {
+                validator.Errors.ForEach(e =>
+                    baseResponse.Errors.Add(new ValidationError
+                    {
+                        PropertyName = e.PropertyName,
+                        ErrorMessage = e.ErrorMessage
+                    })
+                );
+                return BadRequest(baseResponse);
+            }
+
+            var response = await _driveService.ManualAssignmentCandidate(request);
+
+            baseResponse.Warnings.ForEach(response.Warnings.Add);
+
+            _transactionRepository.CommitTransaction();
+
+            _logger.LogInformation(LogMessage.EndMethod, nameof(ManualAssignment));
+
+            return Ok(response);
+        }
+    }
+    catch (CommonException ex)
+    {
+        _logger.LogWarning(LogMessage.EndMethodException, nameof(ManualAssignment), ex.Message);
+        _transactionRepository.RollbackTransaction();
+        return BadRequest(new BaseResponse
+        {
+            Errors = [
+                new ValidationError { PropertyName = PropertyName.Main, ErrorMessage = ex.Message }
+            ]
+        });
+    }
+}
+
+//dto
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace HireHub.Core.DTO
+{
+    public class ManualAssignmentCandidate
+    {
+        public int driveId { get; set; }
+        public int driveCandidateId { get; set; }
+
+        public int userId { get; set; }
+    }
+}
+
+//service
+public async Task<Response<Round>> ManualAssignmentCandidate(ManualAssignmentCandidate request)
+{
+    _logger.LogInformation(LogMessage.StartMethod, nameof(ManualAssignmentCandidate));
+
+    var drivemember = await _userRepository.GetDriveMemberAsync(request.driveId,request.userId);
+    if (drivemember == null)
+    {
+        throw new CommonException(ResponseMessage.DriveMemberNotFound);
+    }
+
+    var round = new Round
+    {
+        DriveCandidateId = request.driveCandidateId,
+        InterviewerId = drivemember.DriveMemberId,
+        RoundType = RoundType.Tech1,
+        Status = RoundStatus.Scheduled,
+        Result = RoundResult.Pending
+    };
+    await _roundRepository.AddAsync(round, CancellationToken.None);
+    await _saveRepository.SaveChangesAsync();
+
+    return new()
+    {
+        Data=round
+    };
+
+}
+
+//change in notassigned candidate -- drive controller

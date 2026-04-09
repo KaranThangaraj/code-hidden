@@ -1,0 +1,88 @@
+
+CREATE TABLE candidate_report(
+	report_id int IDENTITY(1,1) primary key,
+	candidate_full_name varchar(100) not null,
+	decision varchar(50) not null,
+	experience int null,
+	missing_skills varchar(max) null,
+	reasoning varchar(max) null,
+	drive_id int null,
+
+	CONSTRAINT FK_candidate_report_drive FOREIGN KEY (drive_id) REFERENCES drives(drive_id) ON UPDATE NO ACTION ON DELETE SET NULL,
+
+);
+
+namespace HireHub.Core.Data.Models;
+
+public class CandidateReport : BaseEntity
+{
+    public CandidateReport() : base("candidate_report")
+    {
+    }
+
+    public int ReportId { get; set; }
+    public string CandidateFullName { get; set; } = null!;
+    public string Decision { get; set; } = null!;
+    public int? Experience { get; set; }
+    public string? MissingSkills { get; set; }
+    public string? Reasoning { get; set; }
+
+    public int? DriveId { get; set; }
+
+    // Navigation
+    public Drive? Drive { get; set; }
+}
+
+public ICollection<CandidateReport> CandidateReports { get; set; } = new List<CandidateReport>();
+
+public DbSet<CandidateReport> CandidateReports => Set<CandidateReport>();
+
+modelBuilder.Entity<CandidateReport>(b =>
+{
+    b.ToTable("candidate_report");
+
+    b.HasKey(x => x.ReportId);
+
+    b.Property(x => x.ReportId)
+        .HasColumnName("report_id")
+        .HasColumnType("INT")
+        .IsRequired();
+
+    b.Property(x => x.CandidateFullName)
+        .HasColumnName("candidate_full_name")
+        .HasColumnType("VARCHAR(100)")
+        .HasMaxLength(100)
+        .IsRequired();
+
+    b.Property(x => x.Decision)
+        .HasColumnName("decision")
+        .HasColumnType("VARCHAR(50)")
+        .HasMaxLength(50)
+        .IsRequired();
+
+    b.Property(x => x.Experience)
+        .HasColumnName("experience")
+        .HasColumnType("INT")
+        .IsRequired(false);
+
+    b.Property(x => x.MissingSkills)
+        .HasColumnName("missing_skills")
+        .HasColumnType("VARCHAR(MAX)")
+        .IsRequired(false);
+
+    b.Property(x => x.Reasoning)
+        .HasColumnName("reasoning")
+        .HasColumnType("VARCHAR(MAX)")
+        .IsRequired(false);
+
+    b.Property(x => x.DriveId)
+        .HasColumnName("drive_id")
+        .HasColumnType("INT")
+        .IsRequired(false);
+
+    // Relationship
+    b.HasOne(x => x.Drive)
+        .WithMany(d => d.CandidateReports)
+        .HasForeignKey(x => x.DriveId)
+        .OnDelete(DeleteBehavior.SetNull);
+});

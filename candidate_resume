@@ -1,0 +1,63 @@
+CREATE TABLE candidate_resume (
+    resume_id int IDENTITY(1,1) primary key,
+	resume_url varchar(max),
+	candidate_id int null,
+	
+	CONSTRAINT FK_candidate_resume_candidate FOREIGN KEY (candidate_id)	REFERENCES candidates(candidate_id) ON UPDATE NO ACTION ON DELETE SET NULL,
+);
+
+modelBuilder.Entity<CandidateResume>(b =>
+{
+    b.ToTable("candidate_resume");
+
+    b.HasKey(x => x.ResumeId);
+
+    b.Property(x => x.ResumeId)
+        .HasColumnName("resume_id")
+        .HasColumnType("INT")
+        .IsRequired();
+
+    b.Property(x => x.ResumeUrl)
+        .HasColumnName("resume_url")
+        .HasColumnType("VARCHAR(500)")
+        .HasMaxLength(500)
+        .IsRequired();
+
+    b.Property(x => x.CandidateId)
+        .HasColumnName("candidate_id")
+        .HasColumnType("INT")
+        .IsRequired(false);
+
+    // Relationship
+    b.HasOne(x => x.Candidate)
+        .WithMany(c => c.Resumes)
+        .HasForeignKey(x => x.CandidateId)
+        .OnDelete(DeleteBehavior.SetNull);
+});
+
+using HireHub.Shared.Common.Models;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace HireHub.Core.Data.Models
+{
+    public class CandidateResume:BaseEntity
+    {
+        public CandidateResume() : base("candidate_resume") { }
+
+        public int ResumeId {  get; set; }
+        public string ResumeUrl { get; set; }
+        public int? CandidateId { get; set; }
+
+        public Candidate? Candidate { get; set; }
+
+    }
+}
+
+public DbSet<CandidateResume> CandidateResumes => Set<CandidateResume>();
+
+
+modal-> candidate-> public ICollection<CandidateResume> Resumes { get; set; } = new List<CandidateResume>();
